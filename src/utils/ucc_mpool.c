@@ -62,16 +62,23 @@ ucc_status_t ucc_mpool_init(ucc_mpool_t *mp, size_t priv_size, size_t elem_size,
         ucs_ops->obj_cleanup = ucc_mpool_obj_cleanup_wrapper;
     }
 
-    return ucs_status_to_ucc_status(
-        ucs_mpool_init(&mp->super, priv_size, elem_size, align_offset,
-                       alignment, elems_per_chunk, max_elems, ucs_ops, name));
+    ucs_mpool_params_t mp_params;
+    ucs_mpool_params_reset(&mp_params);
+    mp_params.priv_size = priv_size;
+    mp_params.elem_size = elem_size;
+    mp_params.align_offset = align_offset;
+    mp_params.alignment = alignment;
+    mp_params.elems_per_chunk = elems_per_chunk;
+    mp_params.max_elems = max_elems;
+    mp_params.ops = ucs_ops;
+    mp_params.name = name;
+
+    return ucs_status_to_ucc_status(ucs_mpool_init(&mp_params, &mp->super));
 }
 
 void ucc_mpool_cleanup(ucc_mpool_t *mp, int leak_check)
 {
-    ucs_mpool_ops_t *ops = mp->super.data->ops;
     ucs_mpool_cleanup(&mp->super, leak_check);
-    ucc_free(ops);
     ucc_spinlock_destroy(&mp->lock);
 }
 

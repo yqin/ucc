@@ -143,6 +143,8 @@ typedef struct ucc_tl_lib_attr {
 
 #define UCC_TL_CTX_OOB(_ctx) ((_ctx)->super.super.ucc_context->params.oob)
 
+#define UCC_TL_TEAM_ID(_tl_team) (_tl_team)->super.super.params.id
+
 #define UCC_TL_TEAM_SIZE(_tl_team) (_tl_team)->super.super.params.size
 
 #define UCC_TL_TEAM_RANK(_tl_team) (_tl_team)->super.super.params.rank

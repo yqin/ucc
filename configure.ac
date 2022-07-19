@@ -160,6 +160,7 @@ AS_IF([test "x$with_docs_only" = xyes],
      m4_include([config/m4/configure.m4])
      m4_include([config/m4/tl_coll_plugins.m4])
      m4_include([config/m4/check_tls.m4])
+     m4_include([config/m4/dpu_offload.m4])
      m4_include([test/gtest/configure.m4])
 
      mc_modules=":cpu"
