@@ -14,6 +14,7 @@
 #ifdef HAVE_DPU_OFFLOAD
 #include "dpu_offload_service_daemon.h"
 #include "dpu_offload_envvars.h"
+#include "allgatherv/allgatherv_offload_host.h"
 
 ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team);
 ucc_status_t ucc_tl_ucp_team_offload_engine_fini(ucc_tl_ucp_team_t *team);
@@ -139,16 +140,14 @@ ucc_status_t ucc_tl_ucp_team_create_test(ucc_base_team_t *tl_team)
         if (!group_cache_populated(offloading_engine, tl_team->params.id))
             return UCC_INPROGRESS;
 
-#if 0
-        /* TODO: register AM callbacks for allgathter to the client */
-        status = register_allgather_host_notifications(team->dpu_offloading_econtext->event_channels);
+        /* register AM callbacks for allgathter to the client */
+        status = register_allgatherv_host_notifications(team->dpu_offloading_econtext->event_channels);
         if (status) {
             tl_error(tl_team->context->lib, "Register event notification callbacks failed.");
             return status;
         } else {
             tl_debug(tl_team->context->lib, "Register event notification callbacks succeeded.");
         }
-#endif
     }
 #endif
 
@@ -302,6 +301,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team)
         dpu_offload_event_t *ev;
         int ret = send_add_group_rank_request(team->dpu_offloading_econtext,
                                               GET_SERVER_EP(team->dpu_offloading_econtext),
+                                              team->dpu_offloading_econtext->client->server_id,
                                               team->super.super.params.id,
                                               UCC_TL_TEAM_RANK(team),
                                               UCC_TL_TEAM_SIZE(team),

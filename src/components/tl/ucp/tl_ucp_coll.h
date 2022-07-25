@@ -13,7 +13,11 @@
 #include "components/mc/base/ucc_mc_base.h"
 #include "tl_ucp_tag.h"
 
+#ifndef HAVE_DPU_OFFLOAD
 #define UCC_TL_UCP_N_DEFAULT_ALG_SELECT_STR 4
+#else
+#define UCC_TL_UCP_N_DEFAULT_ALG_SELECT_STR 5
+#endif // HAVE_DPU_OFFLOAD
 extern const char
     *ucc_tl_ucp_default_alg_select_str[UCC_TL_UCP_N_DEFAULT_ALG_SELECT_STR];
 

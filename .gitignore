@@ -58,3 +58,24 @@ Makefile
 
 # IDEs
 .idea/
+
+.gitignore
+.libs
+*.la
+.deps
+.dirstamp
+*.lo
+*.o
+libtool
+config.h
+config.h.in
+config.h.in~
+*.log
+*.cmake
+modules/
+src/core/ucc_version.c
+src/ucc/api/ucc_version.h
+test/mpi/ucc_test_mpi
+tools/info/build_config.h
+tools/info/ucc_info
+tools/perf/ucc_perftest

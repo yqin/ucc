@@ -25,7 +25,11 @@ const char
         UCC_TL_UCP_ALLREDUCE_DEFAULT_ALG_SELECT_STR,
         UCC_TL_UCP_BCAST_DEFAULT_ALG_SELECT_STR,
         UCC_TL_UCP_ALLTOALL_DEFAULT_ALG_SELECT_STR,
-        UCC_TL_UCP_REDUCE_SCATTER_DEFAULT_ALG_SELECT_STR};
+        UCC_TL_UCP_REDUCE_SCATTER_DEFAULT_ALG_SELECT_STR
+#ifdef HAVE_DPU_OFFLOAD
+       ,UCC_TL_UCP_ALLGATHERV_DEFAULT_ALG_SELECT_STR
+#endif // HAVE_DPU_OFFLOAD
+    };
 
 void ucc_tl_ucp_send_completion_cb(void *request, ucs_status_t status,
                                    void *user_data)
@@ -124,6 +128,10 @@ static inline int alg_id_from_str(ucc_coll_type_t coll_type, const char *str)
         return ucc_tl_ucp_alltoall_alg_from_str(str);
     case UCC_COLL_TYPE_REDUCE_SCATTER:
         return ucc_tl_ucp_reduce_scatter_alg_from_str(str);
+#ifdef HAVE_DPU_OFFLOAD
+    case UCC_COLL_TYPE_ALLGATHERV:
+        return ucc_tl_ucp_allgatherv_alg_from_str(str);
+#endif // HAVE_DPU_OFFLOAD
     default:
         break;
     }
@@ -190,6 +198,21 @@ ucc_status_t ucc_tl_ucp_alg_id_to_init(int alg_id, const char *alg_id_str,
             break;
         };
         break;
+#ifdef HAVE_DPU_OFFLOAD
+    case UCC_COLL_TYPE_ALLGATHERV:
+        switch (alg_id) {
+        case UCC_TL_UCP_ALLGATHERV_ALG_RING:
+            *init = ucc_tl_ucp_allgatherv_ring_init;
+            break;
+        case UCC_TL_UCP_ALLGATHERV_ALG_OFFLOAD:
+            *init = ucc_tl_ucp_allgatherv_offload_init;
+            break;
+        default:
+            status = UCC_ERR_INVALID_PARAM;
+            break;
+        };
+        break;
+#endif // HAVE_DPU_OFFLOAD
 
     default:
         status = UCC_ERR_NOT_SUPPORTED;
