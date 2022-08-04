@@ -3,32 +3,29 @@
  *
  * See file LICENSE for terms.
  */
+
 #include "config.h"
 #include "tl_ucp.h"
-#include "bcast.h"
+#include "ibcast.h"
+#include "utils/ucc_coll_utils.h"
 
+#ifdef HAVE_DPU_OFFLOAD
 #include "dpu_offload_service_daemon.h"
-#include "bcast_offload.h"
+#include "ibcast_offload.h"
 
 static bool active_colls_initialized = false;
 
 ucc_base_coll_alg_info_t
-    ucc_tl_ucp_bcast_algs[UCC_TL_UCP_BCAST_ALG_LAST + 1] = {
-        [UCC_TL_UCP_BCAST_ALG_KNOMIAL] =
-            {.id   = UCC_TL_UCP_BCAST_ALG_KNOMIAL,
-             .name = "knomial",
-             .desc = "bcast over knomial tree with arbitrary radix "
-                     "(latency oriented alg)"},
-        [UCC_TL_UCP_BCAST_ALG_SAG_KNOMIAL] =
-            {.id   = UCC_TL_UCP_BCAST_ALG_SAG_KNOMIAL,
-             .name = "sag_knomial",
-             .desc = "recursive k-nomial scatter followed by k-nomial "
-                     "allgather (bw oriented alg)"},
-        [UCC_TL_UCP_BCAST_ALG_OFFLOAD] =
-            {.id   = UCC_TL_UCP_BCAST_ALG_OFFLOAD,
+    ucc_tl_ucp_ibcast_algs[UCC_TL_UCP_IBCAST_ALG_LAST + 1] = {
+        [UCC_TL_UCP_IBCAST_ALG_RING] =
+            {.id   = UCC_TL_UCP_IBCAST_ALG_RING,
+             .name = "ring",
+             .desc = "ring algorithm running on the host"},
+        [UCC_TL_UCP_IBCAST_ALG_OFFLOAD] =
+            {.id   = UCC_TL_UCP_IBCAST_ALG_OFFLOAD,
              .name = "offload",
-             .desc = "offloaded knomial algorithm running on the dpu"},
-        [UCC_TL_UCP_BCAST_ALG_LAST] = {
+             .desc = "offloaded ring algorithm running on the dpu"},
+        [UCC_TL_UCP_IBCAST_ALG_LAST] = {
             .id = 0, .name = NULL, .desc = NULL}};
 
 /* calculate the true start address and length of the buffer */
@@ -107,29 +104,29 @@ ucc_status_t pack_rkey(ucc_tl_ucp_task_t *task, ucp_mem_h memh, void **rkey_buf,
     return UCC_OK;
 }
 
-/* calculate the size of bcast_offload_args_t data structure */
+/* calculate the size of allgatherv_offload_args_t data structure */
 size_t
 get_offload_args_packed_size(ucc_rank_t comm_size, size_t s_rkey_buf_size,
                              size_t r_rkey_buf_size)
 {
     size_t total_size = 0;
 
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, coll_type);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, tag);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, group_id);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, size);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, rank);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, padding);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, s_start);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, s_length);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, r_start);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, r_length);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, coll_type);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, tag);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_id);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, size);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, rank);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, padding);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, s_start);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, s_length);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, r_start);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, r_length);
     total_size += comm_size *
-        FIELD_SIZEOF(bcast_offload_args_t, r_displacements[0]);
+        FIELD_SIZEOF(allgatherv_offload_args_t, r_displacements[0]);
     total_size += comm_size *
-        FIELD_SIZEOF(bcast_offload_args_t, r_counts[0]);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, s_rkey_len);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, r_rkey_len);
+        FIELD_SIZEOF(allgatherv_offload_args_t, r_counts[0]);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, s_rkey_len);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, r_rkey_len);
     total_size += s_rkey_buf_size;
     total_size += r_rkey_buf_size;
 
@@ -138,7 +135,7 @@ get_offload_args_packed_size(ucc_rank_t comm_size, size_t s_rkey_buf_size,
 
 /* pack args to send to DPU */
 size_t
-pack_bcast_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
+pack_allgatherv_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
                              size_t s_length, void *r_start, size_t r_length,
                              void *s_rkey_buf, size_t s_rkey_buf_len,
                              void *r_rkey_buf, size_t r_rkey_buf_len,
@@ -151,26 +148,26 @@ pack_bcast_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
     size_t r_dt_size = ucc_dt_size(args->dst.info_v.datatype);
 
     *((uint32_t *)(args_buf + total_size)) = args->coll_type;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, coll_type);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, coll_type);
     *((uint32_t *)(args_buf + total_size)) = task->tag;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, tag);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, tag);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_ID(team);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, group_id);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_id);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_SIZE(team);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, size);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, size);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_RANK(team);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, rank);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, padding);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, rank);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, padding);
 
     *((uint64_t *)(args_buf + total_size)) = (uint64_t)s_start;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, s_start);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, s_start);
     *((uint64_t *)(args_buf + total_size)) = s_length;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, s_length);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, s_length);
 
     *((uint64_t *)(args_buf + total_size)) = (uint64_t)r_start;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, r_start);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, r_start);
     *((uint64_t *)(args_buf + total_size)) = r_length;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, r_length);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, r_length);
 
     for (i = 0; i < size; i++) {
         *((uint64_t *)(args_buf + total_size)) =
@@ -199,75 +196,12 @@ pack_bcast_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
     return total_size;
 }
 
-/* pack args to send to DPU */
-size_t
-pack_bcast_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
-                             size_t s_length, void *r_start, size_t r_length,
-                             void *s_rkey_buf, size_t s_rkey_buf_len,
-                             void *r_rkey_buf, size_t r_rkey_buf_len,
-                             void *args_buf)
-{
-    ucc_tl_ucp_team_t *team = TASK_TEAM(task);
-    ucc_coll_args_t   *args = &TASK_ARGS(task);
-    ucc_rank_t i, size = UCC_TL_TEAM_SIZE(team);
-    size_t total_size = 0;
-    size_t r_dt_size = ucc_dt_size(args->dst.info_v.datatype);
-
-    *((uint32_t *)(args_buf + total_size)) = args->coll_type;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, coll_type);
-    *((uint32_t *)(args_buf + total_size)) = task->tag;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, tag);
-    *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_ID(team);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, group_id);
-    *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_SIZE(team);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, size);
-    *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_RANK(team);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, rank);
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, padding);
-
-    *((uint64_t *)(args_buf + total_size)) = (uint64_t)s_start;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, s_start);
-    *((uint64_t *)(args_buf + total_size)) = s_length;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, s_length);
-
-    *((uint64_t *)(args_buf + total_size)) = (uint64_t)r_start;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, r_start);
-    *((uint64_t *)(args_buf + total_size)) = r_length;
-    total_size += FIELD_SIZEOF(bcast_offload_args_t, r_length);
-
-    for (i = 0; i < size; i++) {
-        *((uint64_t *)(args_buf + total_size)) =
-                ucc_coll_args_get_displacement(args,
-                    args->dst.info_v.displacements, i) * r_dt_size;
-        total_size += sizeof(uint64_t);
-    }
-
-    for (i = 0; i < size; i++) {
-        *((uint64_t *)(args_buf + total_size)) =
-                ucc_coll_args_get_count(args,
-                    args->dst.info_v.counts, i) * r_dt_size;
-        total_size += sizeof(uint64_t);
-    }
-
-    *((uint64_t *)(args_buf + total_size)) = s_rkey_buf_len;
-    total_size += sizeof(uint64_t);
-    *((uint64_t *)(args_buf + total_size)) = r_rkey_buf_len;
-    total_size += sizeof(uint64_t);
-
-    memcpy(args_buf + total_size, s_rkey_buf, s_rkey_buf_len);
-    total_size += s_rkey_buf_len;
-    memcpy(args_buf + total_size, r_rkey_buf, r_rkey_buf_len);
-    total_size += r_rkey_buf_len;
-
-    return total_size;
-}
-
-ucc_status_t ucc_tl_ucp_bcast_offload_progress(ucc_coll_task_t *coll_task)
+ucc_status_t ucc_tl_ucp_ibcast_offload_progress(ucc_coll_task_t *coll_task)
 {
     ucc_tl_ucp_task_t      *task = ucc_derived_of(coll_task, ucc_tl_ucp_task_t);
     ucc_tl_ucp_team_t      *team = TASK_TEAM(task);
     ucc_tl_ucp_lib_t       *lib  = TASK_LIB(task);
-    bcast_host_coll_t *op   = NULL, *op_item, *op_tmp;
+    allgatherv_host_coll_t *op   = NULL, *op_item, *op_tmp;
 
     /* find the associated coll op from active_colls */
     ucc_list_for_each_safe(op_item, op_tmp, &active_colls, super) {
@@ -308,13 +242,13 @@ ucc_status_t ucc_tl_ucp_bcast_offload_progress(ucc_coll_task_t *coll_task)
     return task->super.super.status;
 }
 
-ucc_status_t ucc_tl_ucp_bcast_offload_start(ucc_coll_task_t *coll_task)
+ucc_status_t ucc_tl_ucp_ibcast_offload_start(ucc_coll_task_t *coll_task)
 {
     ucc_tl_ucp_task_t      *task = ucc_derived_of(coll_task, ucc_tl_ucp_task_t);
     ucc_tl_ucp_team_t      *team = TASK_TEAM(task);
     ucc_tl_ucp_lib_t       *lib  = TASK_LIB(task);
     ucc_coll_args_t        *args = &TASK_ARGS(task);
-    bcast_host_coll_t *op   = NULL, *op_item, *op_tmp;
+    ibcast_host_coll_t *op   = NULL, *op_item, *op_tmp;
     ucc_status_t            status;
     int                     rc;
 
@@ -377,7 +311,7 @@ ucc_status_t ucc_tl_ucp_bcast_offload_start(ucc_coll_task_t *coll_task)
 
     /* pack offload args to event payload buffer */
     size_t offload_args_packed_size =
-        pack_bcast_offload_args(task, s_start, s_len, r_start, r_len,
+        pack_allgatherv_offload_args(task, s_start, s_len, r_start, r_len,
         s_rkey_buf, s_rkey_buf_len, r_rkey_buf, r_rkey_buf_len, event->payload);
     assert(offload_args_packed_size == packed_size);
 
@@ -387,7 +321,7 @@ ucc_status_t ucc_tl_ucp_bcast_offload_start(ucc_coll_task_t *coll_task)
 
     /* send offload args to DPU */
     rc = event_channel_emit(&event,
-                            UCC_TL_UCP_BCAST_HOST_ARRIVE_AM_ID,
+                            UCC_TL_UCP_ALLGATHERV_HOST_ARRIVE_AM_ID,
                             GET_SERVER_EP(econtext),
                             econtext->client->server_id,
                             NULL);
@@ -396,7 +330,6 @@ ucc_status_t ucc_tl_ucp_bcast_offload_start(ucc_coll_task_t *coll_task)
         return UCC_ERR_NO_MESSAGE;
     }
 
-    /* TODO: change r_size */
     /* deliver local data */
     int rank = UCC_TL_TEAM_RANK(team);
     size_t r_displacement = ucc_coll_args_get_displacement(args,
@@ -409,7 +342,7 @@ ucc_status_t ucc_tl_ucp_bcast_offload_start(ucc_coll_task_t *coll_task)
     memcpy(r_start + r_displacement, s_start, r_size);
 
     /* progress collective once */
-    status = ucc_tl_ucp_bcast_offload_progress(coll_task);
+    status = ucc_tl_ucp_allgatherv_offload_progress(coll_task);
     if (UCC_INPROGRESS == status) {
         ucc_progress_enqueue(UCC_TL_CORE_CTX(team)->pq, &task->super);
         return UCC_OK;
@@ -418,7 +351,7 @@ ucc_status_t ucc_tl_ucp_bcast_offload_start(ucc_coll_task_t *coll_task)
     return ucc_task_complete(coll_task);
 }
 
-ucc_status_t ucc_tl_ucp_bcast_offload_init(ucc_base_coll_args_t *coll_args,
+ucc_status_t ucc_tl_ucp_ibcast_offload_init(ucc_base_coll_args_t *coll_args,
                                                 ucc_base_team_t      *team,
                                                 ucc_coll_task_t     **task_h)
 {
@@ -426,20 +359,20 @@ ucc_status_t ucc_tl_ucp_bcast_offload_init(ucc_base_coll_args_t *coll_args,
     *task_h = &task->super;
 
     if ((!UCC_DT_IS_PREDEFINED((TASK_ARGS(task)).dst.info_v.datatype)) ||
-        (!UCC_IS_INPLACE(TASK_ARGS(task)) &&`
+        (!UCC_IS_INPLACE(TASK_ARGS(task)) &&
          (!UCC_DT_IS_PREDEFINED((TASK_ARGS(task)).src.info.datatype)))) {
         tl_error(UCC_TASK_LIB(task), "user defined datatype is not supported");
         return UCC_ERR_NOT_SUPPORTED;
     }
 
-    /* initialize active_colls if this is the first bcast coll */
+    /* initialize active_colls if this is the first ibcast coll */
     if (active_colls_initialized == false) {
         ucs_list_head_init(&active_colls);
         active_colls_initialized = true;
     }
 
     /* allocate a new coll op for tracking */
-    bcast_host_coll_t *op = malloc(sizeof(bcast_host_coll_t));
+    ibcast_host_coll_t *op = malloc(sizeof(ibcast_host_coll_t));
     if (!op) {
         ucs_error("not enough memory");
         return UCS_ERR_NO_MEMORY;
@@ -450,35 +383,37 @@ ucc_status_t ucc_tl_ucp_bcast_offload_init(ucc_base_coll_args_t *coll_args,
     op->complete  = 0;
     ucs_list_add_tail(&active_colls, &op->super);
 
-    task->super.post     = ucc_tl_ucp_bcast_offload_start;
-    task->super.progress = ucc_tl_ucp_bcast_offload_progress;
+    task->super.post     = ucc_tl_ucp_ibcast_offload_start;
+    task->super.progress = ucc_tl_ucp_ibcast_offload_progress;
+    return UCC_OK;
+}
+#endif // HAVE_DPU_OFFLOAD
+
+ucc_status_t ucc_tl_ucp_ibcast_ring_init_common(ucc_tl_ucp_task_t *task)
+{
+    if ((!UCC_DT_IS_PREDEFINED((TASK_ARGS(task)).dst.info_v.datatype)) ||
+        (!UCC_IS_INPLACE(TASK_ARGS(task)) &&
+         (!UCC_DT_IS_PREDEFINED((TASK_ARGS(task)).src.info.datatype)))) {
+        tl_error(UCC_TASK_LIB(task), "user defined datatype is not supported");
+        return UCC_ERR_NOT_SUPPORTED;
+    }
+
+    task->super.post     = ucc_tl_ucp_ibcast_ring_start;
+    task->super.progress = ucc_tl_ucp_ibcast_ring_progress;
+
     return UCC_OK;
 }
 
-// DPU OFFLOAD
-
-ucc_status_t ucc_tl_ucp_bcast_init(ucc_tl_ucp_task_t *task)
+ucc_status_t ucc_tl_ucp_ibcast_ring_init(ucc_base_coll_args_t *coll_args,
+                                             ucc_base_team_t      *team,
+                                             ucc_coll_task_t     **task_h)
 {
-    ucc_tl_ucp_team_t *team      = TASK_TEAM(task);
-    ucc_rank_t         team_size = UCC_TL_TEAM_SIZE(team);
-
-    task->bcast_kn.radix =
-        ucc_min(UCC_TL_UCP_TEAM_LIB(team)->cfg.bcast_kn_radix, team_size);
-
-    task->super.post     = ucc_tl_ucp_bcast_knomial_start;
-    task->super.progress = ucc_tl_ucp_bcast_knomial_progress;
-    return UCC_OK;
-}
-
-ucc_status_t ucc_tl_ucp_bcast_knomial_init(ucc_base_coll_args_t *coll_args,
-                                               ucc_base_team_t *     team,
-                                               ucc_coll_task_t **    task_h)
-{
-    ucc_tl_ucp_task_t *task;
-    ucc_status_t       status;
-
-    task    = ucc_tl_ucp_init_task(coll_args, team);
-    status  = ucc_tl_ucp_bcast_init(task);
+    ucc_tl_ucp_task_t *task = ucc_tl_ucp_init_task(coll_args, team);
     *task_h = &task->super;
-    return status;
+    return ucc_tl_ucp_ibcast_ring_init_common(task);
+}
+
+ucc_status_t ucc_tl_ucp_ibcast_init(ucc_tl_ucp_task_t *task)
+{
+    return ucc_tl_ucp_ibcast_ring_init_common(task);
 }

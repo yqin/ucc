@@ -15,6 +15,7 @@
 #include "dpu_offload_service_daemon.h"
 #include "dpu_offload_envvars.h"
 #include "allgatherv/allgatherv_offload_host.h"
+#include "bcast/bcast_offload_host.h"
 
 ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team);
 ucc_status_t ucc_tl_ucp_team_offload_engine_fini(ucc_tl_ucp_team_t *team);
@@ -142,6 +143,15 @@ ucc_status_t ucc_tl_ucp_team_create_test(ucc_base_team_t *tl_team)
 
         /* register AM callbacks for allgathter to the client */
         status = register_allgatherv_host_notifications(team->dpu_offloading_econtext->event_channels);
+        if (status) {
+            tl_error(tl_team->context->lib, "Register event notification callbacks failed.");
+            return status;
+        } else {
+            tl_debug(tl_team->context->lib, "Register event notification callbacks succeeded.");
+        }
+
+        /* register AM callbacks for bcast to the client */
+        status = register_bcast_host_notifications(team->dpu_offloading_econtext->event_channels);
         if (status) {
             tl_error(tl_team->context->lib, "Register event notification callbacks failed.");
             return status;
