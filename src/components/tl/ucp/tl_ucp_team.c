@@ -16,7 +16,7 @@
 #include "dpu_offload_envvars.h"
 #include "allgatherv/allgatherv_offload_host.h"
 
-ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team);
+ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const ucc_base_team_params_t *params);
 ucc_status_t ucc_tl_ucp_team_offload_engine_fini(ucc_tl_ucp_team_t *team);
 
 // Once and only one engine
@@ -42,7 +42,7 @@ UCC_CLASS_INIT_FUNC(ucc_tl_ucp_team_t, ucc_base_context_t *tl_context,
 #ifdef HAVE_DPU_OFFLOAD
     tl_debug(tl_context->lib, "Initializing team's offloading data...\n");
     self->dpu_offloading_econtext = NULL;
-    ucc_tl_ucp_team_offload_engine_init(self);
+    ucc_tl_ucp_team_offload_engine_init(self, params);
 #endif // HAVE_DPU_OFFLOAD
 
     tl_info(tl_context->lib, "posted tl team: %p", self);
@@ -137,7 +137,18 @@ ucc_status_t ucc_tl_ucp_team_create_test(ucc_base_team_t *tl_team)
     {
         offloading_engine_t *offloading_engine = ucc_tl_ucp_offloading.engine;
         offload_engine_progress(offloading_engine);
-        if (!group_cache_populated(offloading_engine, tl_team->params.id))
+        ucc_rank_t lead_rank = -1;
+        if (UCC_TL_CORE_TEAM(team) != NULL)
+        {
+            lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
+        }
+        assert(lead_rank != -1);
+        group_id_t gp = {
+            .id = tl_team->params.id,
+            .lead = lead_rank,
+        };
+
+        if (!group_cache_populated(offloading_engine, gp))
             return UCC_INPROGRESS;
 
         /* register AM callbacks for allgathter to the client */
@@ -167,12 +178,35 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_fini(ucc_tl_ucp_team_t *team)
         return UCS_OK;
     }
 
-    client_fini(&(ucc_tl_ucp_offloading.engine->client));
-    offload_engine_fini(&(ucc_tl_ucp_offloading.engine));
+    if (ucc_tl_ucp_offloading.engine != NULL) {
+        if (ucc_tl_ucp_offloading.engine->client != NULL)
+            client_fini(&(ucc_tl_ucp_offloading.engine->client));
+        offload_engine_fini(&(ucc_tl_ucp_offloading.engine));
+    }
     return UCS_OK;
 }
 
-ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team)
+void create_team_map(ucc_tl_ucp_team_t *team, void *buff)
+{
+    int64_t i;
+    if (UCC_TL_CORE_TEAM(team) == NULL)
+        return;
+    int64_t *ptr = (int64_t*)buff;
+    for (i = 0; i < UCC_TL_TEAM_SIZE(team); i++)
+    {
+        ucc_rank_t world_comm_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, i);
+        *ptr = world_comm_rank;
+        ptr = (int64_t*)((ptrdiff_t)ptr + sizeof(int64_t));
+    }
+}
+
+size_t get_team_packed_info_size(ucc_tl_ucp_team_t *team)
+{
+    size_t size_map_single_rank = sizeof(int64_t);
+    return sizeof(rank_info_t) + (UCC_TL_TEAM_SIZE(team) * size_map_single_rank);
+}
+
+ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const ucc_base_team_params_t *params)
 {
     ucc_tl_ucp_lib_t     *lib      = UCC_TL_UCP_TEAM_LIB(team);
     ucc_tl_ucp_context_t *ctx      = UCC_TL_UCP_TEAM_CTX(team);
@@ -196,15 +230,21 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team)
         ucc_context_topo_init(&core_ctx->addr_storage, &core_ctx->topo);
         core_topo_needs_to_be_freed = true;
     }
+    status = ucc_ep_map_create_nested(&UCC_TL_CORE_TEAM(team)->ctx_map,
+                                      &UCC_TL_TEAM_MAP(team), &team->ctx_map);
+    if (UCC_OK != status) {
+        tl_error(lib, "failed to create create ctx map");
+        return status;
+    }
     // This is the set parameters that seem to work in this context, change carefully
-    set.map.ep_num = UCC_TL_TEAM_SIZE(team);
-    set.map.type   = UCC_EP_MAP_FULL;
-    set.myrank     = UCC_TL_TEAM_RANK(team);
+    ucc_rank_t my_rank = UCC_TL_TEAM_RANK(team);
+    set.map = team->ctx_map;
+    set.myrank = my_rank;
     ucc_topo_init(set, core_ctx->topo, &cur_topo);
     assert(cur_topo);
     ucc_sbgp_t *node_sbgp = ucc_topo_get_sbgp(cur_topo, UCC_SBGP_NODE);
     n_local_ranks = node_sbgp->group_size;
-    int local_rank = node_sbgp->group_rank;
+    ucc_rank_t local_rank = node_sbgp->group_rank;
     ucc_topo_cleanup(cur_topo);
     cur_topo = NULL;
 
@@ -212,6 +252,14 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team)
     {
         ucc_context_topo_cleanup(core_ctx->topo);
         core_ctx->topo = NULL;
+    }
+
+    /* Figure out a unique team ID so we can correctly support non-overlapping
+       communicators/teams */
+    ucc_rank_t lead_rank = 0;
+    if (UCC_TL_CORE_TEAM(team) != NULL)
+    {
+        lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
     }
 
     // DPU offloading: during the initialization of the team, we check if
@@ -262,8 +310,8 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team)
         if (ucc_tl_ucp_offloading.cfg_file != NULL)
         {
             tl_debug(lib, "Platform configuration file exists, loading...");
-            uint16_t team_id = team->super.super.params.id;
-            rank_info.group_id = team_id;
+            rank_info.group_id.lead = lead_rank;
+            rank_info.group_id.id = UCC_TL_TEAM_ID(team);
             rank_info.group_rank = UCC_TL_TEAM_RANK(team);
             rank_info.group_size = UCC_TL_TEAM_SIZE(team);
             rank_info.n_local_ranks = n_local_ranks;
@@ -299,13 +347,34 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team)
         // We already have a connection to the local DPU, we just need to notify the DPU of a new team
         team->dpu_offloading_econtext = ucc_tl_ucp_offloading.engine->client;
         dpu_offload_event_t *ev;
+        dpu_offload_event_info_t ev_info;
+        rank_info_t *rank_info;
+        RESET_EVENT_INFO(&ev_info);
+        ev_info.payload_size = get_team_packed_info_size(team);
+        rc = event_get(team->dpu_offloading_econtext->event_channels, &ev_info, &ev);
+        if (rc != DO_SUCCESS)
+        {
+            ucc_error("event_get() failed");
+            abort();
+        }
+        rank_info = (rank_info_t*)ev->payload;
+        RESET_RANK_INFO(rank_info);
+        rank_info->group_id.lead = lead_rank;
+        rank_info->group_id.id = team->super.super.params.id;
+        rank_info->group_rank = UCC_TL_TEAM_RANK(team);
+        rank_info->group_size = UCC_TL_TEAM_SIZE(team);
+        rank_info->n_local_ranks = n_local_ranks;
+        rank_info->local_rank = local_rank;
+        void *ptr = (void*)((ptrdiff_t)(ev->payload) + sizeof(rank_info_t));
+        create_team_map(team, ptr);
+        assert(team);
+        assert(team->dpu_offloading_econtext);
+        assert(GET_SERVER_EP(team->dpu_offloading_econtext));
+        assert(team->dpu_offloading_econtext->client->server_id);
         int ret = send_add_group_rank_request(team->dpu_offloading_econtext,
                                               GET_SERVER_EP(team->dpu_offloading_econtext),
                                               team->dpu_offloading_econtext->client->server_id,
-                                              team->super.super.params.id,
-                                              UCC_TL_TEAM_RANK(team),
-                                              UCC_TL_TEAM_SIZE(team),
-                                              &ev);
+                                              ev);
         if (ret!= EVENT_DONE && ret != EVENT_INPROGRESS)
         {
             tl_debug(lib, "get_event() failed");

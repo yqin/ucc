@@ -71,7 +71,7 @@ register_memh(ucc_tl_ucp_task_t *task, void *address, size_t length,
     mparams.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS |
                          UCP_MEM_MAP_PARAM_FIELD_LENGTH |
                          UCP_MEM_MAP_PARAM_FIELD_FLAGS;
-    mparams.flags      = UCP_MEM_MAP_SHARED;
+    mparams.flags      = UCP_MEM_MAP_EXPORT;
     mparams.address    = address;
     mparams.length     = length;
 
@@ -84,20 +84,17 @@ register_memh(ucc_tl_ucp_task_t *task, void *address, size_t length,
     return UCC_OK;
 }
 
-/* pack rkey buffer */
-ucc_status_t pack_rkey(ucc_tl_ucp_task_t *task, ucp_mem_h memh, void **rkey_buf,
+/* pack memh buffer */
+ucc_status_t pack_memh(ucc_tl_ucp_task_t *task, ucp_mem_h memh, void **memh_buf,
                        size_t *buf_size)
 {
     ucc_tl_ucp_lib_t *lib = TASK_LIB(task);
-    ucp_context_h context = TASK_CTX(task)->ucp_context;
-    ucp_mkey_pack_params_t mkey_pack_params = {0};
+    ucp_memh_pack_params_t memh_pack_params = {0};
     int rc;
 
-    mkey_pack_params.field_mask = UCP_MKEY_PACK_PARAM_FIELD_FLAGS;
-    mkey_pack_params.flags      = UCP_MKEY_PACK_FLAG_SHARED;
-    rc = ucp_mkey_pack(context, memh, &mkey_pack_params, rkey_buf, buf_size);
+    rc = ucp_memh_pack(memh, &memh_pack_params, memh_buf, buf_size);
     if (rc) {
-        tl_error(lib, "ucp_mkey_pack failed: %s", ucs_status_string(rc));
+        tl_error(lib, "ucp_memh_pack() failed: %s", ucs_status_string(rc));
         return UCC_ERR_NO_MEMORY;
     }
 
@@ -106,14 +103,15 @@ ucc_status_t pack_rkey(ucc_tl_ucp_task_t *task, ucp_mem_h memh, void **rkey_buf,
 
 /* calculate the size of allgatherv_offload_args_t data structure */
 size_t
-get_offload_args_packed_size(ucc_rank_t comm_size, size_t s_rkey_buf_size,
-                             size_t r_rkey_buf_size)
+get_offload_args_packed_size(ucc_rank_t comm_size, size_t s_memh_buf_size,
+                             size_t r_memh_buf_size)
 {
     size_t total_size = 0;
 
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, coll_type);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, tag);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_id);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_lead);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, size);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, rank);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, padding);
@@ -125,10 +123,10 @@ get_offload_args_packed_size(ucc_rank_t comm_size, size_t s_rkey_buf_size,
         FIELD_SIZEOF(allgatherv_offload_args_t, r_displacements[0]);
     total_size += comm_size *
         FIELD_SIZEOF(allgatherv_offload_args_t, r_counts[0]);
-    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, s_rkey_len);
-    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, r_rkey_len);
-    total_size += s_rkey_buf_size;
-    total_size += r_rkey_buf_size;
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, s_memh_len);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, r_memh_len);
+    total_size += s_memh_buf_size;
+    total_size += r_memh_buf_size;
 
     return total_size;
 }
@@ -137,8 +135,8 @@ get_offload_args_packed_size(ucc_rank_t comm_size, size_t s_rkey_buf_size,
 size_t
 pack_allgatherv_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
                              size_t s_length, void *r_start, size_t r_length,
-                             void *s_rkey_buf, size_t s_rkey_buf_len,
-                             void *r_rkey_buf, size_t r_rkey_buf_len,
+                             void *s_memh_buf, size_t s_memh_buf_len,
+                             void *r_memh_buf, size_t r_memh_buf_len,
                              void *args_buf)
 {
     ucc_tl_ucp_team_t *team = TASK_TEAM(task);
@@ -146,6 +144,14 @@ pack_allgatherv_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
     ucc_rank_t i, size = UCC_TL_TEAM_SIZE(team);
     size_t total_size = 0;
     size_t r_dt_size = ucc_dt_size(args->dst.info_v.datatype);
+    ucc_rank_t lead_rank = -1;
+    if (UCC_TL_CORE_TEAM(team) != NULL)
+    {
+        /* FIXME: */
+        //lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
+        lead_rank = ucc_ep_map_eval(team->ctx_map, 0);
+    }
+    assert(lead_rank != -1);
 
     *((uint32_t *)(args_buf + total_size)) = args->coll_type;
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, coll_type);
@@ -153,6 +159,8 @@ pack_allgatherv_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, tag);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_ID(team);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_id);
+    *((uint32_t *)(args_buf + total_size)) = lead_rank;
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_lead);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_SIZE(team);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, size);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_RANK(team);
@@ -183,15 +191,15 @@ pack_allgatherv_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
         total_size += sizeof(uint64_t);
     }
 
-    *((uint64_t *)(args_buf + total_size)) = s_rkey_buf_len;
+    *((uint64_t *)(args_buf + total_size)) = s_memh_buf_len;
     total_size += sizeof(uint64_t);
-    *((uint64_t *)(args_buf + total_size)) = r_rkey_buf_len;
+    *((uint64_t *)(args_buf + total_size)) = r_memh_buf_len;
     total_size += sizeof(uint64_t);
 
-    memcpy(args_buf + total_size, s_rkey_buf, s_rkey_buf_len);
-    total_size += s_rkey_buf_len;
-    memcpy(args_buf + total_size, r_rkey_buf, r_rkey_buf_len);
-    total_size += r_rkey_buf_len;
+    memcpy(args_buf + total_size, s_memh_buf, s_memh_buf_len);
+    total_size += s_memh_buf_len;
+    memcpy(args_buf + total_size, r_memh_buf, r_memh_buf_len);
+    total_size += r_memh_buf_len;
 
     return total_size;
 }
@@ -223,11 +231,11 @@ ucc_status_t ucc_tl_ucp_allgatherv_offload_progress(ucc_coll_task_t *coll_task)
 
         rc = ucp_mem_unmap(ucp_context, op->s_memh);
         if (rc) {
-            tl_error(lib, "ucp_mem_unmap failed: %s", ucs_status_string(rc));
+            tl_error(lib, "ucp_mem_unmap() failed: %s", ucs_status_string(rc));
         }
         rc = ucp_mem_unmap(ucp_context, op->r_memh);
         if (rc) {
-            tl_error(lib, "ucp_mem_unmap failed: %s", ucs_status_string(rc));
+            tl_error(lib, "ucp_mem_unmap() failed: %s", ucs_status_string(rc));
         }
 
         /* clean up op since it's no longer needed */
@@ -283,21 +291,21 @@ ucc_status_t ucc_tl_ucp_allgatherv_offload_start(ucc_coll_task_t *coll_task)
         return UCC_ERR_NO_MEMORY;
     }
 
-    /* pack rkey buffers */
-    void *s_rkey_buf, *r_rkey_buf;
-    size_t s_rkey_buf_len, r_rkey_buf_len;
-    status = pack_rkey(task, op->s_memh, &s_rkey_buf, &s_rkey_buf_len);
+    /* pack memh buffers */
+    void *s_memh_buf, *r_memh_buf;
+    size_t s_memh_buf_len, r_memh_buf_len;
+    status = pack_memh(task, op->s_memh, &s_memh_buf, &s_memh_buf_len);
     if (status) {
         return UCC_ERR_NO_MEMORY;
     }
-    status = pack_rkey(task, op->r_memh, &r_rkey_buf, &r_rkey_buf_len);
+    status = pack_memh(task, op->r_memh, &r_memh_buf, &r_memh_buf_len);
     if (status) {
         return UCC_ERR_NO_MEMORY;
     }
 
     /* calculate buffer size for metadata to send to DPU */
     size_t packed_size = get_offload_args_packed_size(
-            UCC_TL_TEAM_SIZE(team), s_rkey_buf_len, r_rkey_buf_len);
+            UCC_TL_TEAM_SIZE(team), s_memh_buf_len, r_memh_buf_len);
 
     /* get an event from event pool, allocate payload buffer */
     execution_context_t *econtext = team->dpu_offloading_econtext;
@@ -310,14 +318,13 @@ ucc_status_t ucc_tl_ucp_allgatherv_offload_start(ucc_coll_task_t *coll_task)
     }
 
     /* pack offload args to event payload buffer */
-    size_t offload_args_packed_size =
-        pack_allgatherv_offload_args(task, s_start, s_len, r_start, r_len,
-        s_rkey_buf, s_rkey_buf_len, r_rkey_buf, r_rkey_buf_len, event->payload);
-    assert(offload_args_packed_size == packed_size);
+    pack_allgatherv_offload_args(task, s_start, s_len, r_start, r_len,
+        s_memh_buf, s_memh_buf_len, r_memh_buf, r_memh_buf_len, event->payload);
 
-    /* rkey_buf is no longer needed */
-    ucp_rkey_buffer_release(s_rkey_buf);
-    ucp_rkey_buffer_release(r_rkey_buf);
+    /* memh_buf is no longer needed */
+    ucp_memh_buffer_release_params_t memh_buffer_release_params = {0};
+    ucp_memh_buffer_release(s_memh_buf, &memh_buffer_release_params);
+    ucp_memh_buffer_release(r_memh_buf, &memh_buffer_release_params);
 
     /* send offload args to DPU */
     rc = event_channel_emit(&event,

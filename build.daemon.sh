@@ -10,6 +10,6 @@ module load workshop.arm
 export PREFIX="$1"
 
 cd `dirname $0`/src/components/tl/ucp/offload_dpu_daemon
-gcc offload_dpu_daemon.c -O0 -g -ldpuoffloaddaemon -lucp -lucs -o ucc_offload_dpu_daemon
+gcc offload_dpu_daemon.c -g -ldpuoffloaddaemon -lucp -lucs -o ucc_offload_dpu_daemon
 cp ucc_offload_dpu_daemon "$PREFIX/bin"
 rm -f ucc_offload_dpu_daemon

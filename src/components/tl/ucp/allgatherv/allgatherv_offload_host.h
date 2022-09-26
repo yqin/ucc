@@ -33,10 +33,16 @@ dpu_done_am_cb(struct dpu_offload_ev_sys *ev_sys, execution_context_t *context,
         ucc_tl_ucp_team_t *team      = TASK_TEAM(task);
         ucc_coll_args_t   *coll_args = &TASK_ARGS(task);
         uint32_t           rank      = UCC_TL_TEAM_RANK(team);
-        uint16_t           group_id  = team->super.super.params.id;
+        uint16_t           group_id  = UCC_TL_TEAM_ID(team);
+        ucc_rank_t         lead_rank = -1;
+        if (UCC_TL_CORE_TEAM(team) != NULL)
+        {
+            lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
+        }
         if (coll_args->coll_type == args->coll_type &&
             task->tag            == args->tag &&
             group_id             == args->group_id &&
+            lead_rank            == args->group_lead &&
             rank                 == args->rank) {
             /* found a match */
             op = op_item;
@@ -58,9 +64,9 @@ static int register_allgatherv_host_notifications(dpu_offload_ev_sys_t *ev_sys)
 
     rc = event_channel_register(ev_sys,
                                 UCC_TL_UCP_ALLGATHERV_DPU_DONE_AM_ID,
-                                dpu_done_am_cb);
+                                dpu_done_am_cb, NULL);
     if (rc) {
-        ucs_error("event_channel_register failed for AM ID %d",
+        ucs_error("event_channel_register() failed for AM ID %d",
                   UCC_TL_UCP_ALLGATHERV_DPU_DONE_AM_ID);
         return rc;
     }

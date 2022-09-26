@@ -39,11 +39,13 @@ unpack_allgatherv_offload_args(void *data, allgatherv_offload_args_t *args)
     total_size += sizeof(uint32_t);
     args->group_id = *((uint32_t *)(data + total_size));
     total_size += sizeof(uint32_t);
+    args->group_lead = *((uint32_t *)(data + total_size));
+    total_size += sizeof(uint32_t);
     args->size = *((uint32_t *)(data + total_size));
     total_size += sizeof(uint32_t);
     args->rank = *((uint32_t *)(data + total_size));
     total_size += sizeof(uint32_t);
-    total_size += sizeof(uint32_t) * 3;
+    total_size += sizeof(uint32_t) * 2;
 
     args->s_start = *((uint64_t *)(data + total_size));
     total_size += sizeof(uint64_t);
@@ -71,43 +73,38 @@ unpack_allgatherv_offload_args(void *data, allgatherv_offload_args_t *args)
         total_size += sizeof(uint64_t);
     }
 
-    args->s_rkey_len = *((uint64_t *)(data + total_size));
+    args->s_memh_len = *((uint64_t *)(data + total_size));
     total_size += sizeof(uint64_t);
-    args->r_rkey_len = *((uint64_t *)(data + total_size));
+    args->r_memh_len = *((uint64_t *)(data + total_size));
     total_size += sizeof(uint64_t);
 
-    args->s_rkey_buf = malloc(args->s_rkey_len);
-    args->r_rkey_buf = malloc(args->r_rkey_len);
-    if (!args->s_rkey_buf || !args->r_rkey_buf) {
+    args->s_memh_buf = malloc(args->s_memh_len);
+    args->r_memh_buf = malloc(args->r_memh_len);
+    if (!args->s_memh_buf || !args->r_memh_buf) {
         ucs_error("not enough memory");
         return 0;
     }
 
-    memcpy(args->s_rkey_buf, data + total_size, args->s_rkey_len);
-    total_size += args->s_rkey_len;
-    memcpy(args->r_rkey_buf, data + total_size, args->r_rkey_len);
-    total_size += args->r_rkey_len;
+    memcpy(args->s_memh_buf, data + total_size, args->s_memh_len);
+    total_size += args->s_memh_len;
+    memcpy(args->r_memh_buf, data + total_size, args->r_memh_len);
+    total_size += args->r_memh_len;
 
     return total_size;
 }
 
-/* import xgvmi memory key on the dpu side */
+/* import xgvmi memh on the dpu side */
 static int
-import_memh(execution_context_t *context, void *address, size_t length,
-            void *rkey_buf, ucp_mem_h *memh)
+import_memh(execution_context_t *context, void *memh_buf, ucp_mem_h *memh)
 {
     ucp_context_h ucp_context = context->engine->ucp_context;
     ucp_mem_map_params_t mparams = {0};
     int rc;
 
-    mparams.field_mask          = UCP_MEM_MAP_PARAM_FIELD_FLAGS |
-                                  UCP_MEM_MAP_PARAM_FIELD_ADDRESS |
-                                  UCP_MEM_MAP_PARAM_FIELD_LENGTH |
-                                  UCP_MEM_MAP_PARAM_FIELD_SHARED_MKEY_BUFFER;
-    mparams.flags               = UCP_MEM_MAP_SHARED;
-    mparams.address             = address;
-    mparams.length              = length;
-    mparams.shared_mkey_buffer  = rkey_buf;
+    mparams.field_mask           = UCP_MEM_MAP_PARAM_FIELD_FLAGS |
+                                   UCP_MEM_MAP_PARAM_FIELD_EXPORTED_MEMH_BUFFER;
+    mparams.flags                = UCP_MEM_MAP_EXPORT;
+    mparams.exported_memh_buffer = memh_buf;
 
     rc = ucp_mem_map(ucp_context, &mparams, memh);
     if (rc) {
@@ -170,6 +167,7 @@ static size_t get_allgatherv_offload_dpu_rts_packed_size(size_t rkey_len)
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, coll_type);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, tag);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, group_id);
+    total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, group_lead);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, rank);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, peer);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, padding);
@@ -194,11 +192,13 @@ pack_allgatherv_offload_dpu_rts(allgatherv_offload_coll_t *op,
     total_size += sizeof(uint32_t);
     *((uint32_t *)(args_buf + total_size)) = op->args.group_id;
     total_size += sizeof(uint32_t);
+    *((uint32_t *)(args_buf + total_size)) = op->args.group_lead;
+    total_size += sizeof(uint32_t);
     *((uint32_t *)(args_buf + total_size)) = op->args.rank;
     total_size += sizeof(uint32_t);
     *((uint32_t *)(args_buf + total_size)) = peer;
     total_size += sizeof(uint32_t);
-    total_size += sizeof(uint32_t) * 3;
+    total_size += sizeof(uint32_t) * 2;
 
     *((uint64_t *)(args_buf + total_size)) = op->args.s_start;
     total_size += sizeof(uint64_t);
@@ -290,13 +290,18 @@ complete_op(execution_context_t *context, allgatherv_offload_coll_t *op)
 
     /* pack DPU DONE notification buffer */
     allgatherv_offload_dpu_done_t *args_buf = event->payload;
-    args_buf->coll_type = op->args.coll_type;
-    args_buf->tag       = op->args.tag;
-    args_buf->group_id  = op->args.group_id;
-    args_buf->rank      = op->args.rank;
+    args_buf->coll_type   = op->args.coll_type;
+    args_buf->tag         = op->args.tag;
+    args_buf->group_id    = op->args.group_id;
+    args_buf->group_lead  = op->args.group_lead;
+    args_buf->rank        = op->args.rank;
 
     /* send DPU DONE notification to HOST */
-    dest_client_t c = GET_CLIENT_BY_RANK(host_context, op->args.group_id,
+    group_id_t target_group = {
+        .id = args_buf->group_id,
+        .lead = args_buf->group_lead,
+    };
+    dest_client_t c = GET_CLIENT_BY_RANK(host_context, target_group,
                                          op->args.rank);
     assert(c.ep);
     rc = event_channel_emit(&event, UCC_TL_UCP_ALLGATHERV_DPU_DONE_AM_ID,
@@ -314,8 +319,8 @@ complete_op(execution_context_t *context, allgatherv_offload_coll_t *op)
 
     /* release rkey buffers */
     ucp_rkey_buffer_release(op->s_rkey_buf);
-    ucp_rkey_buffer_release(op->args.s_rkey_buf);
-    ucp_rkey_buffer_release(op->args.r_rkey_buf);
+    free(op->args.s_memh_buf);
+    free(op->args.r_memh_buf);
 
     /* deregister xgvmi mkey */
     ucp_context_h ucp_context = context->engine->ucp_context;
@@ -384,13 +389,11 @@ host_arrive_am_cb(struct dpu_offload_ev_sys *ev_sys,
     ucs_list_head_init(&op->r_posted);
 
     /* import xgvmi shared key to create alias memory handles */
-    rc = import_memh(context, (void *)args->s_start, args->s_length,
-                     args->s_rkey_buf, &op->s_memh);
+    rc = import_memh(context, args->s_memh_buf, &op->s_memh);
     if (rc) {
         return UCS_ERR_NO_MEMORY;
     }
-    rc = import_memh(context, (void *)args->r_start, args->r_length,
-                     args->r_rkey_buf, &op->r_memh);
+    rc = import_memh(context, args->r_memh_buf, &op->r_memh);
     if (rc) {
         return UCS_ERR_NO_MEMORY;
     }
@@ -421,7 +424,11 @@ host_arrive_am_cb(struct dpu_offload_ev_sys *ev_sys,
         /* figure out my remote service process ep */
         dpu_offload_event_t *sp_id_event;
         uint64_t sp_id;
-        rc = get_sp_id_by_group_rank(context->engine, args->group_id,
+        group_id_t target_group = {
+            .id = args->group_id,
+            .lead = args->group_lead,
+        };
+        rc = get_sp_id_by_group_rank(context->engine, target_group,
                                      subop->peer, 0, &sp_id, &sp_id_event);
         if (rc || sp_id_event) {
             ucs_error("get_sp_id_by_group_rank() failed");
@@ -488,10 +495,11 @@ dpu_rts_am_cb(struct dpu_offload_ev_sys *ev_sys, execution_context_t *context,
     /* find receiver from active_colls */
     allgatherv_offload_coll_t *op = NULL, *op_item, *op_tmp;
     ucs_list_for_each_safe(op_item, op_tmp, &active_colls, super) {
-        if (op_item->args.coll_type == args->coll_type &&
-            op_item->args.tag       == args->tag &&
-            op_item->args.group_id  == args->group_id &&
-            op_item->args.rank      == args->peer) {
+        if (op_item->args.coll_type   == args->coll_type &&
+            op_item->args.tag         == args->tag &&
+            op_item->args.group_id    == args->group_id &&
+            op_item->args.group_lead  == args->group_lead &&
+            op_item->args.rank        == args->peer) {
             /* found a match */
             op = op_item;
             break;
@@ -557,10 +565,11 @@ dpu_ack_am_cb(struct dpu_offload_ev_sys *ev_sys, execution_context_t *context,
     /* find sender from active_colls */
     allgatherv_offload_coll_t *op = NULL, *op_item, *op_tmp;
     ucs_list_for_each_safe(op_item, op_tmp, &active_colls, super) {
-        if (op_item->args.coll_type == args->coll_type &&
-            op_item->args.tag       == args->tag &&
-            op_item->args.group_id  == args->group_id &&
-            op_item->args.rank      == args->peer) {
+        if (op_item->args.coll_type   == args->coll_type &&
+            op_item->args.tag         == args->tag &&
+            op_item->args.group_id    == args->group_id &&
+            op_item->args.group_lead  == args->group_lead &&
+            op_item->args.rank        == args->peer) {
             /* found a match */
             op = op_item;
             break;
@@ -603,28 +612,25 @@ static int register_allgatherv_dpu_notifications(offloading_engine_t *engine)
     int rc;
 
     rc = engine_register_default_notification_handler(engine,
-            UCC_TL_UCP_ALLGATHERV_HOST_ARRIVE_AM_ID,
-            host_arrive_am_cb);
+            UCC_TL_UCP_ALLGATHERV_HOST_ARRIVE_AM_ID, host_arrive_am_cb, NULL);
     if (rc) {
-        ucs_error("event_channel_register failed for AM ID %d",
+        ucs_error("event_channel_register() failed for AM ID %d",
                   UCC_TL_UCP_ALLGATHERV_HOST_ARRIVE_AM_ID);
         return rc;
     }
 
     rc = engine_register_default_notification_handler(engine,
-            UCC_TL_UCP_ALLGATHERV_DPU_RTS_AM_ID,
-            dpu_rts_am_cb);
+            UCC_TL_UCP_ALLGATHERV_DPU_RTS_AM_ID, dpu_rts_am_cb, NULL);
     if (rc) {
-        ucs_error("event_channel_register failed for AM ID %d",
+        ucs_error("event_channel_register() failed for AM ID %d",
                   UCC_TL_UCP_ALLGATHERV_DPU_RTS_AM_ID);
         return rc;
     }
 
     rc = engine_register_default_notification_handler(engine,
-            UCC_TL_UCP_ALLGATHERV_DPU_ACK_AM_ID,
-            dpu_ack_am_cb);
+            UCC_TL_UCP_ALLGATHERV_DPU_ACK_AM_ID, dpu_ack_am_cb, NULL);
     if (rc) {
-        ucs_error("event_channel_register failed for AM ID %d",
+        ucs_error("event_channel_register() failed for AM ID %d",
                   UCC_TL_UCP_ALLGATHERV_DPU_ACK_AM_ID);
         return rc;
     }
@@ -643,10 +649,11 @@ static int progress_rts(execution_context_t *context)
     allgatherv_offload_subop_t *subop = NULL, *subop_item, *subop_tmp;
     ucs_list_for_each_safe(rts_item, rts_tmp, &pending_rts, super) {
         ucs_list_for_each_safe(op_item, op_tmp, &active_colls, super) {
-            if (rts_item->payload->coll_type == op_item->args.coll_type &&
-                rts_item->payload->tag       == op_item->args.tag &&
-                rts_item->payload->group_id  == op_item->args.group_id &&
-                rts_item->payload->peer      == op_item->args.rank) {
+            if (rts_item->payload->coll_type   == op_item->args.coll_type &&
+                rts_item->payload->tag         == op_item->args.tag &&
+                rts_item->payload->group_id    == op_item->args.group_id &&
+                rts_item->payload->group_lead  == op_item->args.group_lead &&
+                rts_item->payload->peer        == op_item->args.rank) {
                 /* found a matched op */
                 op = op_item;
 
@@ -726,7 +733,11 @@ static int progress_receive(execution_context_t *context)
             /* figure out my remote SP ep */
             dpu_offload_event_t *sp_id_event;
             uint64_t sp_id;
-            rc = get_sp_id_by_group_rank(context->engine, op->args.group_id,
+            group_id_t target_group = {
+                .id = op->args.group_id,
+                .lead = op->args.group_lead,
+            };
+            rc = get_sp_id_by_group_rank(context->engine, target_group,
                                          subop->peer, 0, &sp_id, &sp_id_event);
             if (rc || sp_id_event) {
                 ucs_error("get_dpu_id_by_group_rank() failed");
@@ -761,11 +772,12 @@ static int progress_receive(execution_context_t *context)
             /* pack DPU_ACK notification buffer */
             allgatherv_offload_dpu_ack_t *args_buf =
                 (allgatherv_offload_dpu_ack_t *)sp_event->payload;
-            args_buf->coll_type = op->args.coll_type;
-            args_buf->tag       = op->args.tag;
-            args_buf->group_id  = op->args.group_id;
-            args_buf->rank      = op->args.rank;
-            args_buf->peer      = subop->peer;
+            args_buf->coll_type   = op->args.coll_type;
+            args_buf->tag         = op->args.tag;
+            args_buf->group_id    = op->args.group_id;
+            args_buf->group_lead  = op->args.group_lead;
+            args_buf->rank        = op->args.rank;
+            args_buf->peer        = subop->peer;
 
             /* send DPU_ACK notification to remote DPU */
             rc = event_channel_emit(&sp_event,
@@ -808,7 +820,11 @@ static int progress_receive(execution_context_t *context)
         /* figure out my remote service process ep */
         dpu_offload_event_t *sp_id_event;
         uint64_t sp_id;
-        rc = get_sp_id_by_group_rank(context->engine, item->op->args.group_id,
+        group_id_t target_group = {
+            .id = item->op->args.group_id,
+            .lead = item->op->args.group_lead,
+        };
+        rc = get_sp_id_by_group_rank(context->engine, target_group,
                                      item->s_rank, 0, &sp_id, &sp_id_event);
         if (rc || sp_id_event) {
             ucs_error("get_sp_id_by_group_rank() failed");

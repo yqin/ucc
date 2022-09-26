@@ -30,8 +30,7 @@ function dpu_start_daemons
     daemonexe="${daemondir}/bin/ucc_offload_dpu_daemon"
     daemonenv="UCX_NET_DEVICES=mlx5_0:1 \
         UCX_TLS=rc_x \
-        UCX_ZCOPY_THRESH=0 \
-        UCX_MEM_INVALIDATE=n \
+        UCX_ZCOPY_THRESH=128 \
         UCX_LOG_LEVEL=warn \
         UCX_HANDLE_ERRORS=bt,freeze \
         DPU_OFFLOAD_DBG_VERBOSE=0 \
@@ -44,7 +43,7 @@ function dpu_start_daemons
         for local_id in $(seq 0 $(($ns - 1))); do
             daemonlog="$HOME/daemonlog-${SLURM_JOBID}-${dpu}-${local_id}.out"
             ssh "$dpu" "${daemonenv} DPU_OFFLOAD_SERVICE_PROCESS_GLOBAL_ID=${global_id} DPU_OFFLOAD_SERVICE_PROCESS_LOCAL_ID=${local_id} nohup $daemonexe &> $daemonlog &"
-            echo "Daemon ($daemonexe) start status: $?"
+            #echo "Daemon ($daemonexe) start status: $?"
             global_id=$((global_id + 1))
         done
     done
@@ -101,7 +100,6 @@ mpirun  -np ${NP} \
         --mca pml ucx \
             -x UCX_NET_DEVICES=mlx5_2:1 \
             -x UCX_TLS=rc_x \
-            -x UCX_MEM_INVALIDATE=n \
             -x UCX_LOG_LEVEL=warn \
             -x UCX_HANDLE_ERRORS=bt,freeze \
         --mca coll_ucc_enable 1 \

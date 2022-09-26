@@ -65,9 +65,10 @@ typedef struct allgatherv_offload_args {
     uint32_t  coll_type;        /* collective type */
     uint32_t  tag;              /* collective ID/TAG */
     uint32_t  group_id;         /* collective comm/group/team ID */
+    uint32_t  group_lead;       /* collective comm/group/team lead */
     uint32_t  size;             /* collective comm/group/team size */
     uint32_t  rank;             /* rank in the comm/group/team */
-    uint32_t  padding[3];       /* padding */
+    uint32_t  padding[2];       /* padding */
     /* 32 bytes total before this line */
     uint64_t  s_start;          /* send buffer true start address */
     uint64_t  s_length;         /* send buffer memory region length */
@@ -75,11 +76,11 @@ typedef struct allgatherv_offload_args {
     uint64_t  r_length;         /* receive buffer memory region length */
     uint64_t *r_displacements;  /* receive displacements in bytes */
     uint64_t *r_counts;         /* receive count in bytes */
-    uint64_t  s_rkey_len;       /* rkey buffer length for send buffer */
-    uint64_t  r_rkey_len;       /* rkey buffer length for receive buffer */
+    uint64_t  s_memh_len;       /* memh buffer length for send buffer */
+    uint64_t  r_memh_len;       /* memh buffer length for receive buffer */
     /* 8-byte aligned before this line */
-    void     *s_rkey_buf;       /* shared rkey buffer for send buffer */
-    void     *r_rkey_buf;       /* shared rkey buffer for receive buffer */
+    void     *s_memh_buf;       /* shared memh buffer for send buffer */
+    void     *r_memh_buf;       /* shared memh buffer for receive buffer */
 } allgatherv_offload_args_t;
 
 /*
@@ -90,9 +91,10 @@ typedef struct allgatherv_offload_dpu_rts {
     uint32_t  coll_type;        /* collective type */
     uint32_t  tag;              /* collective ID/TAG */
     uint32_t  group_id;         /* collective comm/group/team ID */
+    uint32_t  group_lead;       /* collective comm/group/team lead */
     uint32_t  rank;             /* rank in the comm/group/team */
     uint32_t  peer;             /* peer that I can send data to */
-    uint32_t  padding[3];       /* padding */
+    uint32_t  padding[2];       /* padding */
     /* 32 bytes total before this line */
     uint64_t  start;            /* send start address (with displacement) */
     uint64_t  length;           /* send data length */
@@ -109,6 +111,7 @@ typedef struct allgatherv_offload_dpu_ack {
     uint32_t  coll_type;        /* collective type */
     uint32_t  tag;              /* collective ID/TAG */
     uint32_t  group_id;         /* collective comm/group/team ID */
+    uint32_t  group_lead;       /* collective comm/group/team lead */
     uint32_t  rank;             /* rank in the comm/group/team */
     uint32_t  peer;             /* rank that I received data from */
 } allgatherv_offload_dpu_ack_t;
@@ -118,6 +121,7 @@ typedef struct allgatherv_offload_dpu_done {
     uint32_t  coll_type;        /* collective type */
     uint32_t  tag;              /* collective ID/TAG */
     uint32_t  group_id;         /* collective comm/group/team ID */
+    uint32_t  group_lead;       /* collective comm/group/team lead */
     uint32_t  rank;             /* rank in the comm/group/team */
 } allgatherv_offload_dpu_done_t;
 
@@ -129,7 +133,7 @@ typedef struct allgatherv_offload_dpu_done {
 typedef struct allgatherv_offload_coll {
     ucs_list_link_t               super;        /* op list item */
     ucs_status_t                  status;       /* op status */
-    allgatherv_offload_args_t      args;         /* coll args for this op */
+    allgatherv_offload_args_t     args;         /* coll args for this op */
     size_t                        s_rkey_len;   /* length of s_rkey_buf */
     void                         *s_rkey_buf;   /* s_rkey packed buffer */
     ucp_mem_h                     s_memh;       /* memh for send buffer */

@@ -123,6 +123,7 @@ typedef struct ucc_tl_ucp_team {
     void *                     va_base[MAX_NR_SEGMENTS];
     size_t                     base_length[MAX_NR_SEGMENTS];
 #ifdef HAVE_DPU_OFFLOAD
+    ucc_ep_map_t               ctx_map;
     execution_context_t       *dpu_offloading_econtext;
 #endif
 } ucc_tl_ucp_team_t;
