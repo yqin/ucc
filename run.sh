@@ -77,10 +77,21 @@ ALGO="${2:-ring}"
 NP=${3:-2}
 PPN=${4:-1}
 NS=${5:-1}
+CLUSTER=${SLURM_JOB_PARTITION}
 HOSTLIST=$(scontrol show hostname ${SLURM_NODELIST} |grep -v 'bf' |sed -e "s/\$/:${SLURM_CPUS_ON_NODE}/g" |paste -d , -s)
 DPULIST=$(scontrol show hostname ${SLURM_NODELIST} |grep 'bf' |sed -e "s/\$//g" |paste -d , -s)
-CONFIG=${RDMA_DIR}/etc/thor_${NS}sp.cfg
+CONFIG=${RDMA_DIR}/etc/${CLUSTER}_${NS}sp.cfg
 OFFLOADLIBS=${RDMA_DIR}/dpu.arm/lib:${RDMA_DIR}/ucx.arm/lib:${RDMA_DIR}/ompi.arm/lib
+
+# cluster specific tunings
+if [[ ${CLUSTER} == "thor" ]]; then
+    NET_DEVICES="mlx5_2:1"
+elif [[ ${CLUSTER} == "tessa" ]]; then
+    NET_DEVICES="mlx5_4:1"
+else
+    echo "Cluster ${CLUSTER} not supported!"
+    exit -1
+fi
 
 echo "UCC location:           ${PREFIX}"
 echo "Allgatherv algorithm:   ${ALGO}"
@@ -98,7 +109,7 @@ mpirun  -np ${NP} \
         --bind-to core \
         --rank-by core \
         --mca pml ucx \
-            -x UCX_NET_DEVICES=mlx5_2:1 \
+            -x UCX_NET_DEVICES=${NET_DEVICES} \
             -x UCX_TLS=rc_x \
             -x UCX_LOG_LEVEL=warn \
             -x UCX_HANDLE_ERRORS=bt,freeze \
