@@ -98,13 +98,11 @@ static int
 import_memh(execution_context_t *context, void *memh_buf, ucp_mem_h *memh)
 {
     ucp_context_h ucp_context = context->engine->ucp_context;
-    ucp_mem_map_params_t mparams = {0};
+    ucp_mem_map_params_t mparams = {
+        .field_mask           = UCP_MEM_MAP_PARAM_FIELD_EXPORTED_MEMH_BUFFER,
+        .exported_memh_buffer = memh_buf,
+    };
     int rc;
-
-    mparams.field_mask           = UCP_MEM_MAP_PARAM_FIELD_FLAGS |
-                                   UCP_MEM_MAP_PARAM_FIELD_EXPORTED_MEMH_BUFFER;
-    mparams.flags                = UCP_MEM_MAP_EXPORT;
-    mparams.exported_memh_buffer = memh_buf;
 
     rc = ucp_mem_map(ucp_context, &mparams, memh);
     if (rc) {

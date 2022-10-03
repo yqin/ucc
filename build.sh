@@ -20,7 +20,7 @@ make -j distclean
 # 0. run autogen
 ./autogen.sh
 
-# 1. uncomment below to enable dpu offload build
+# 1. enable dpu offload build
 ./configure --prefix="$PREFIX" --with-mpi --with-ucx="$RDMA_DIR/ucx.x86" --with-dpu-offload="$RDMA_DIR/dpu.x86" 2>&1 | tee configure.log
 
 # 2. install to the preferred location

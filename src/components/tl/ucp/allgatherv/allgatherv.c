@@ -69,9 +69,7 @@ register_memh(ucc_tl_ucp_task_t *task, void *address, size_t length,
     int rc;
 
     mparams.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS |
-                         UCP_MEM_MAP_PARAM_FIELD_LENGTH |
-                         UCP_MEM_MAP_PARAM_FIELD_FLAGS;
-    mparams.flags      = UCP_MEM_MAP_EXPORT;
+                         UCP_MEM_MAP_PARAM_FIELD_LENGTH;
     mparams.address    = address;
     mparams.length     = length;
 
@@ -89,7 +87,10 @@ ucc_status_t pack_memh(ucc_tl_ucp_task_t *task, ucp_mem_h memh, void **memh_buf,
                        size_t *buf_size)
 {
     ucc_tl_ucp_lib_t *lib = TASK_LIB(task);
-    ucp_memh_pack_params_t memh_pack_params = {0};
+    ucp_memh_pack_params_t memh_pack_params = {
+        .field_mask = UCP_MEMH_PACK_PARAM_FIELD_FLAGS,
+        .flags      = UCP_MEMH_PACK_FLAG_EXPORT,
+    };
     int rc;
 
     rc = ucp_memh_pack(memh, &memh_pack_params, memh_buf, buf_size);
