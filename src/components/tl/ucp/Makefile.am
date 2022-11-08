@@ -42,10 +42,13 @@ allgather =                       \
 	allgather/allgather_ring.c    \
 	allgather/allgather_knomial.c
 
-allgatherv =                      \
-	allgatherv/allgatherv.h       \
-	allgatherv/allgatherv.c       \
-	allgatherv/allgatherv_ring.c
+allgatherv =                      		\
+	allgatherv/allgatherv.h       		\
+	allgatherv/allgatherv.c       		\
+	allgatherv/allgatherv_ring.c		\
+	allgatherv/allgatherv_offload.h		\
+	allgatherv/allgatherv_offload_dpu.h	\
+	allgatherv/allgatherv_offload_host.h
 
 reduce =	                 \
 	reduce/reduce.h          \

@@ -111,8 +111,7 @@ get_offload_args_packed_size(ucc_rank_t comm_size, size_t s_memh_buf_size,
 
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, coll_type);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, tag);
-    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_id);
-    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_lead);
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_uid);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, size);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, rank);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, padding);
@@ -145,23 +144,15 @@ pack_allgatherv_offload_args(ucc_tl_ucp_task_t *task, void *s_start,
     ucc_rank_t i, size = UCC_TL_TEAM_SIZE(team);
     size_t total_size = 0;
     size_t r_dt_size = ucc_dt_size(args->dst.info_v.datatype);
-    ucc_rank_t lead_rank = -1;
-    if (UCC_TL_CORE_TEAM(team) != NULL)
-    {
-        /* FIXME: */
-        //lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
-        lead_rank = ucc_ep_map_eval(team->ctx_map, 0);
-    }
-    assert(lead_rank != -1);
+    group_uid_t group_uid = team->offloading_uid;
+    assert(group_uid != INT_MAX);
 
     *((uint32_t *)(args_buf + total_size)) = args->coll_type;
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, coll_type);
     *((uint32_t *)(args_buf + total_size)) = task->tag;
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, tag);
-    *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_ID(team);
-    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_id);
-    *((uint32_t *)(args_buf + total_size)) = lead_rank;
-    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_lead);
+    *((uint32_t *)(args_buf + total_size)) = group_uid;
+    total_size += FIELD_SIZEOF(allgatherv_offload_args_t, group_uid);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_SIZE(team);
     total_size += FIELD_SIZEOF(allgatherv_offload_args_t, size);
     *((uint32_t *)(args_buf + total_size)) = UCC_TL_TEAM_RANK(team);

@@ -24,6 +24,7 @@ struct {
     char *cfg_file;
     offloading_config_t dpus_config;
     offloading_engine_t *engine;
+    int                 engine_ref_count;
 } ucc_tl_ucp_offloading;
 #endif
 
@@ -53,9 +54,13 @@ UCC_CLASS_CLEANUP_FUNC(ucc_tl_ucp_team_t)
 {
     tl_info(self->super.super.context->lib, "finalizing tl team: %p", self);
 #ifdef HAVE_DPU_OFFLOAD
-    // Terminate the execution context
-    ucc_tl_ucp_team_offload_engine_fini(self);
-    self->dpu_offloading_econtext = NULL;
+    ucc_tl_ucp_offloading.engine_ref_count--;
+    if (ucc_tl_ucp_offloading.engine_ref_count == 0) {
+        tl_info(self->super.super.context->lib, "finalizing offload engine: %p", ucc_tl_ucp_offloading.engine);
+        // Terminate the execution context
+        ucc_tl_ucp_team_offload_engine_fini(self);
+        self->dpu_offloading_econtext = NULL;
+    }
 #endif // HAVE_DPU_OFFLOAD
 }
 
@@ -64,6 +69,98 @@ UCC_CLASS_DEFINE(ucc_tl_ucp_team_t, ucc_tl_team_t);
 
 ucc_status_t ucc_tl_ucp_team_destroy(ucc_base_team_t *tl_team)
 {
+    ucc_tl_ucp_team_t *team = ucc_derived_of(tl_team, ucc_tl_ucp_team_t);
+    uint16_t team_id = team->super.super.params.id;
+#ifdef HAVE_DPU_OFFLOAD
+    if (!IS_SERVICE_TEAM(team) && team->dpu_offloading_econtext != NULL)
+    {
+#if !NDEBUG
+        dpu_offload_status_t rc;
+        ucc_status_t status = UCC_OK;
+#endif // !NDEBUG
+        rank_info_t rank_info;
+        ucc_rank_t lead_rank = 0;
+        ucc_sbgp_t *node_sbgp = NULL;
+        ucc_rank_t local_rank = 0;
+        size_t n_local_ranks = 0;
+        ucc_topo_t *cur_topo = NULL;
+        ucc_subset_t set;
+        ucc_tl_ucp_context_t *ctx = NULL;
+        ucc_context_t *core_ctx = NULL;
+        bool core_topo_needs_to_be_freed = false;
+
+        team->offloading_uid = INT_MAX;
+        ctx = UCC_TL_UCP_TEAM_CTX(team);
+        assert(ctx);
+        core_ctx = ctx->super.super.ucc_context;
+        assert(core_ctx);
+        if (!core_ctx->topo) {
+            ucc_context_topo_init(&core_ctx->addr_storage, &core_ctx->topo);
+            core_topo_needs_to_be_freed = true;
+        }
+#if !NDEBUG
+        status = ucc_ep_map_create_nested(&UCC_TL_CORE_TEAM(team)->ctx_map,
+                                          &UCC_TL_TEAM_MAP(team), &team->ctx_map);
+        assert (UCC_OK == status);
+#else
+        ucc_ep_map_create_nested(&UCC_TL_CORE_TEAM(team)->ctx_map,
+                                 &UCC_TL_TEAM_MAP(team), &team->ctx_map);
+#endif // !NDEBUG
+        set.map = team->ctx_map;
+        set.myrank = UCC_TL_TEAM_RANK(team);
+        ucc_topo_init(set, core_ctx->topo, &cur_topo);
+        assert(cur_topo);
+        node_sbgp = ucc_topo_get_sbgp(cur_topo, UCC_SBGP_NODE);
+        assert(node_sbgp);
+        local_rank = node_sbgp->group_rank;
+        n_local_ranks = node_sbgp->group_size;
+        // Generate a unique group ID
+        if (UCC_TL_CORE_TEAM(team) != NULL)
+        {
+            size_t idx;
+            ucc_rank_t group_map[UCC_TL_TEAM_SIZE(team) + 2];
+            lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
+            group_map[0] = lead_rank;
+            group_map[1] = team_id;
+            for (idx = 0; idx < UCC_TL_TEAM_SIZE(team); idx++)
+            {
+                group_map[idx + 2] = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, idx);
+            }
+            team->offloading_uid = HASH_GROUP(&group_map[0], UCC_TL_TEAM_SIZE(team) + 2);
+        }
+        rank_info.group_rank = UCC_TL_TEAM_RANK(team);
+        rank_info.group_size = UCC_TL_TEAM_SIZE(team);
+        rank_info.n_local_ranks = n_local_ranks;
+        rank_info.local_rank = local_rank;
+        assert(team->offloading_uid != INT_MAX);
+        rank_info.group_uid = team->offloading_uid;
+        ucc_topo_cleanup(cur_topo);
+        cur_topo = NULL;
+        if (core_topo_needs_to_be_freed)
+        {
+            ucc_context_topo_cleanup(core_ctx->topo);
+            core_ctx->topo = NULL;
+        }
+
+        tl_debug(UCC_TL_TEAM_LIB(team), "Revoking group %d-%d 0x%x (pid:%d, rank: %d)...",
+                 team_id, lead_rank, team->offloading_uid, getpid(), UCC_TL_TEAM_RANK(team));
+#if !NDEBUG
+        rc = send_revoke_group_rank_request_through_rank_info(team->dpu_offloading_econtext,
+                                                              GET_SERVER_EP(team->dpu_offloading_econtext),
+                                                              team->dpu_offloading_econtext->client->server_id,
+                                                              &rank_info,
+                                                              NULL);
+        assert(rc == DO_SUCCESS);
+#else
+        send_revoke_group_rank_request_through_rank_info(team->dpu_offloading_econtext,
+                                                         GET_SERVER_EP(team->dpu_offloading_econtext),
+                                                         team->dpu_offloading_econtext->client->server_id,
+                                                         &rank_info,
+                                                         NULL);
+#endif // !NDEBUG
+    }
+#endif // HAVE_DPU_OFFLOAD
+
     UCC_CLASS_DELETE_FUNC_NAME(ucc_tl_ucp_team_t)(tl_team);
     return UCC_OK;
 }
@@ -137,19 +234,10 @@ ucc_status_t ucc_tl_ucp_team_create_test(ucc_base_team_t *tl_team)
     {
         offloading_engine_t *offloading_engine = ucc_tl_ucp_offloading.engine;
         offload_engine_progress(offloading_engine);
-        ucc_rank_t lead_rank = -1;
-        if (UCC_TL_CORE_TEAM(team) != NULL)
-        {
-            lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
-        }
-        assert(lead_rank != -1);
-        group_id_t gp = {
-            .id = tl_team->params.id,
-            .lead = lead_rank,
-        };
-
-        if (!group_cache_populated(offloading_engine, gp))
+        if (!group_cache_populated(offloading_engine, team->offloading_uid))
             return UCC_INPROGRESS;
+        tl_debug(UCC_TL_TEAM_LIB(team), "Rank %d: team successfully created (0x%x %p size: %d)",
+                 UCC_TL_TEAM_RANK(team), team->offloading_uid, team, UCC_TL_TEAM_SIZE(team));
 
         /* register AM callbacks for allgathter to the client */
         status = register_allgatherv_host_notifications(team->dpu_offloading_econtext->event_channels);
@@ -255,11 +343,25 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
     }
 
     /* Figure out a unique team ID so we can correctly support non-overlapping
-       communicators/teams */
+    communicators/teams. We also create a temp map of the communicator so we
+    generate a unique ID. Having that ID gives us a unique way to identify a
+    communicator even when communicators IDs are reused when communicators
+    are being created and destroyed. */
     ucc_rank_t lead_rank = 0;
+    team->offloading_uid = INT_MAX;
     if (UCC_TL_CORE_TEAM(team) != NULL)
     {
+        size_t idx;
+        ucc_rank_t group_map[UCC_TL_TEAM_SIZE(team) + 2];
+        uint16_t team_id = team->super.super.params.id;
         lead_rank = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, 0);
+        group_map[0] = lead_rank;
+        group_map[1] = team_id;
+        for (idx = 0; idx < UCC_TL_TEAM_SIZE(team); idx++)
+        {
+            group_map[idx + 2] = ucc_ep_map_eval(UCC_TL_CORE_TEAM(team)->ctx_map, idx);
+        }
+        team->offloading_uid = HASH_GROUP(&group_map[0], UCC_TL_TEAM_SIZE(team) + 2);
     }
 
     // DPU offloading: during the initialization of the team, we check if
@@ -275,6 +377,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
             ucc_error("offload_engine_init() failed");
             return UCS_ERR_NO_MESSAGE;
         }
+        tl_info(lib, "creating offload engine: %p", ucc_tl_ucp_offloading.engine);
         char *offloading_config_file = getenv(OFFLOAD_CONFIG_FILE_PATH_ENVVAR);
         if (offloading_config_file != NULL)
         {
@@ -295,6 +398,8 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
             ucc_error("get_host_config() failed");
             return UCS_ERR_NO_MESSAGE;
         }
+
+        ucc_tl_ucp_offloading.engine_ref_count = 0;
     }
 
     assert(ucc_tl_ucp_offloading.engine);
@@ -310,8 +415,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
         if (ucc_tl_ucp_offloading.cfg_file != NULL)
         {
             tl_debug(lib, "Platform configuration file exists, loading...");
-            rank_info.group_id.lead = lead_rank;
-            rank_info.group_id.id = UCC_TL_TEAM_ID(team);
+            rank_info.group_uid = team->offloading_uid;
             rank_info.group_rank = UCC_TL_TEAM_RANK(team);
             rank_info.group_size = UCC_TL_TEAM_SIZE(team);
             rank_info.n_local_ranks = n_local_ranks;
@@ -331,20 +435,25 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
             tl_debug(lib, "DPU offloading: client initialization based on configuration file...");
             econtext = client_init(ucc_tl_ucp_offloading.engine, &offloading_init_params);
             assert(econtext);
+            ADD_CLIENT_TO_ENGINE(econtext, ucc_tl_ucp_offloading.engine);
         }
         else
         {
             tl_debug(lib, "DPU offloading: client initialization without initialization parameters...");
             econtext = client_init(ucc_tl_ucp_offloading.engine, NULL);
             assert(econtext);
+            ADD_CLIENT_TO_ENGINE(econtext, ucc_tl_ucp_offloading.engine);
         }
         team->dpu_offloading_econtext = econtext;
         ucc_tl_ucp_offloading.engine->client = econtext;
+        tl_info(lib, "using offload engine %p for team %p", ucc_tl_ucp_offloading.engine, team);
+        ucc_tl_ucp_offloading.engine_ref_count++;
         tl_debug(lib, "DPU offloading: client successfully initialized as %p (team: %p)\n", econtext, team);
     }
     else
     {
         // We already have a connection to the local DPU, we just need to notify the DPU of a new team
+        tl_info(lib, "using offload engine %p for team %p", ucc_tl_ucp_offloading.engine, team);
         team->dpu_offloading_econtext = ucc_tl_ucp_offloading.engine->client;
         dpu_offload_event_t *ev;
         dpu_offload_event_info_t ev_info;
@@ -359,8 +468,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
         }
         rank_info = (rank_info_t*)ev->payload;
         RESET_RANK_INFO(rank_info);
-        rank_info->group_id.lead = lead_rank;
-        rank_info->group_id.id = team->super.super.params.id;
+        rank_info->group_uid = team->offloading_uid;
         rank_info->group_rank = UCC_TL_TEAM_RANK(team);
         rank_info->group_size = UCC_TL_TEAM_SIZE(team);
         rank_info->n_local_ranks = n_local_ranks;
@@ -371,6 +479,8 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
         assert(team->dpu_offloading_econtext);
         assert(GET_SERVER_EP(team->dpu_offloading_econtext));
         assert(team->dpu_offloading_econtext->client->server_id);
+        tl_debug(lib, "Rank %d: initiating team 0x%x, id: %d, lead: %d, size: %d, n_local_ranks: %ld",
+                 UCC_TL_TEAM_RANK(team), rank_info->group_uid, team->super.super.params.id, lead_rank, UCC_TL_TEAM_SIZE(team), n_local_ranks);
         int ret = send_add_group_rank_request(team->dpu_offloading_econtext,
                                               GET_SERVER_EP(team->dpu_offloading_econtext),
                                               team->dpu_offloading_econtext->client->server_id,
@@ -380,6 +490,8 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
             tl_debug(lib, "get_event() failed");
             return UCS_ERR_NO_MESSAGE;
         }
+
+        ucc_tl_ucp_offloading.engine_ref_count++;
     }
 
     return status;

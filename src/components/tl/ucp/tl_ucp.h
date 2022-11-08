@@ -125,6 +125,7 @@ typedef struct ucc_tl_ucp_team {
 #ifdef HAVE_DPU_OFFLOAD
     ucc_ep_map_t               ctx_map;
     execution_context_t       *dpu_offloading_econtext;
+    int                        offloading_uid;
 #endif
 } ucc_tl_ucp_team_t;
 UCC_CLASS_DECLARE(ucc_tl_ucp_team_t, ucc_base_context_t *,

@@ -37,15 +37,13 @@ unpack_allgatherv_offload_args(void *data, allgatherv_offload_args_t *args)
     total_size += sizeof(uint32_t);
     args->tag = *((uint32_t *)(data + total_size));
     total_size += sizeof(uint32_t);
-    args->group_id = *((uint32_t *)(data + total_size));
-    total_size += sizeof(uint32_t);
-    args->group_lead = *((uint32_t *)(data + total_size));
+    args->group_uid = *((uint32_t *)(data + total_size));
     total_size += sizeof(uint32_t);
     args->size = *((uint32_t *)(data + total_size));
     total_size += sizeof(uint32_t);
     args->rank = *((uint32_t *)(data + total_size));
     total_size += sizeof(uint32_t);
-    total_size += sizeof(uint32_t) * 2;
+    total_size += sizeof(uint32_t) * 3;
 
     args->s_start = *((uint64_t *)(data + total_size));
     total_size += sizeof(uint64_t);
@@ -164,8 +162,7 @@ static size_t get_allgatherv_offload_dpu_rts_packed_size(size_t rkey_len)
 
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, coll_type);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, tag);
-    total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, group_id);
-    total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, group_lead);
+    total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, group_uid);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, rank);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, peer);
     total_size += FIELD_SIZEOF(allgatherv_offload_dpu_rts_t, padding);
@@ -188,15 +185,13 @@ pack_allgatherv_offload_dpu_rts(allgatherv_offload_coll_t *op,
     total_size += sizeof(uint32_t);
     *((uint32_t *)(args_buf + total_size)) = op->args.tag;
     total_size += sizeof(uint32_t);
-    *((uint32_t *)(args_buf + total_size)) = op->args.group_id;
-    total_size += sizeof(uint32_t);
-    *((uint32_t *)(args_buf + total_size)) = op->args.group_lead;
+    *((uint32_t *)(args_buf + total_size)) = op->args.group_uid;
     total_size += sizeof(uint32_t);
     *((uint32_t *)(args_buf + total_size)) = op->args.rank;
     total_size += sizeof(uint32_t);
     *((uint32_t *)(args_buf + total_size)) = peer;
     total_size += sizeof(uint32_t);
-    total_size += sizeof(uint32_t) * 2;
+    total_size += sizeof(uint32_t) * 3;
 
     *((uint64_t *)(args_buf + total_size)) = op->args.s_start;
     total_size += sizeof(uint64_t);
@@ -290,15 +285,11 @@ complete_op(execution_context_t *context, allgatherv_offload_coll_t *op)
     allgatherv_offload_dpu_done_t *args_buf = event->payload;
     args_buf->coll_type   = op->args.coll_type;
     args_buf->tag         = op->args.tag;
-    args_buf->group_id    = op->args.group_id;
-    args_buf->group_lead  = op->args.group_lead;
+    args_buf->group_uid   = op->args.group_uid;
     args_buf->rank        = op->args.rank;
 
     /* send DPU DONE notification to HOST */
-    group_id_t target_group = {
-        .id = args_buf->group_id,
-        .lead = args_buf->group_lead,
-    };
+    group_uid_t target_group = args_buf->group_uid;
     dest_client_t c = GET_CLIENT_BY_RANK(host_context, target_group,
                                          op->args.rank);
     assert(c.ep);
@@ -422,10 +413,7 @@ host_arrive_am_cb(struct dpu_offload_ev_sys *ev_sys,
         /* figure out my remote service process ep */
         dpu_offload_event_t *sp_id_event;
         uint64_t sp_id;
-        group_id_t target_group = {
-            .id = args->group_id,
-            .lead = args->group_lead,
-        };
+        group_uid_t target_group = args->group_uid;
         rc = get_sp_id_by_group_rank(context->engine, target_group,
                                      subop->peer, 0, &sp_id, &sp_id_event);
         if (rc || sp_id_event) {
@@ -495,8 +483,7 @@ dpu_rts_am_cb(struct dpu_offload_ev_sys *ev_sys, execution_context_t *context,
     ucs_list_for_each_safe(op_item, op_tmp, &active_colls, super) {
         if (op_item->args.coll_type   == args->coll_type &&
             op_item->args.tag         == args->tag &&
-            op_item->args.group_id    == args->group_id &&
-            op_item->args.group_lead  == args->group_lead &&
+            op_item->args.group_uid   == args->group_uid &&
             op_item->args.rank        == args->peer) {
             /* found a match */
             op = op_item;
@@ -565,8 +552,7 @@ dpu_ack_am_cb(struct dpu_offload_ev_sys *ev_sys, execution_context_t *context,
     ucs_list_for_each_safe(op_item, op_tmp, &active_colls, super) {
         if (op_item->args.coll_type   == args->coll_type &&
             op_item->args.tag         == args->tag &&
-            op_item->args.group_id    == args->group_id &&
-            op_item->args.group_lead  == args->group_lead &&
+            op_item->args.group_uid   == args->group_uid &&
             op_item->args.rank        == args->peer) {
             /* found a match */
             op = op_item;
@@ -649,8 +635,7 @@ static int progress_rts(execution_context_t *context)
         ucs_list_for_each_safe(op_item, op_tmp, &active_colls, super) {
             if (rts_item->payload->coll_type   == op_item->args.coll_type &&
                 rts_item->payload->tag         == op_item->args.tag &&
-                rts_item->payload->group_id    == op_item->args.group_id &&
-                rts_item->payload->group_lead  == op_item->args.group_lead &&
+                rts_item->payload->group_uid   == op_item->args.group_uid &&
                 rts_item->payload->peer        == op_item->args.rank) {
                 /* found a matched op */
                 op = op_item;
@@ -731,10 +716,7 @@ static int progress_receive(execution_context_t *context)
             /* figure out my remote SP ep */
             dpu_offload_event_t *sp_id_event;
             uint64_t sp_id;
-            group_id_t target_group = {
-                .id = op->args.group_id,
-                .lead = op->args.group_lead,
-            };
+            group_uid_t target_group = op->args.group_uid;
             rc = get_sp_id_by_group_rank(context->engine, target_group,
                                          subop->peer, 0, &sp_id, &sp_id_event);
             if (rc || sp_id_event) {
@@ -772,8 +754,7 @@ static int progress_receive(execution_context_t *context)
                 (allgatherv_offload_dpu_ack_t *)sp_event->payload;
             args_buf->coll_type   = op->args.coll_type;
             args_buf->tag         = op->args.tag;
-            args_buf->group_id    = op->args.group_id;
-            args_buf->group_lead  = op->args.group_lead;
+            args_buf->group_uid   = op->args.group_uid;
             args_buf->rank        = op->args.rank;
             args_buf->peer        = subop->peer;
 
@@ -818,10 +799,7 @@ static int progress_receive(execution_context_t *context)
         /* figure out my remote service process ep */
         dpu_offload_event_t *sp_id_event;
         uint64_t sp_id;
-        group_id_t target_group = {
-            .id = item->op->args.group_id,
-            .lead = item->op->args.group_lead,
-        };
+        group_uid_t target_group = item->op->args.group_uid;
         rc = get_sp_id_by_group_rank(context->engine, target_group,
                                      item->s_rank, 0, &sp_id, &sp_id_event);
         if (rc || sp_id_event) {
