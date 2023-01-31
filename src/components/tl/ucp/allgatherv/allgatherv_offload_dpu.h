@@ -731,8 +731,8 @@ static int progress_receive(execution_context_t *context)
                                  &notif_dest_id);
             if (rc || !sp_ep || !sp_context)
             {
-                ucs_error("get_sp_ep_by_id() failed for SP %" PRIu64 "(rc:%d, sp_ep: %p, sp_context: %p)",
-                          sp_id, rc, sp_ep, sp_context, sp_context->type);
+                ucs_error("get_sp_ep_by_id() failed for SP %" PRIu64 "(rc: %d, sp_ep: %p, sp_context: %p)",
+                          sp_id, rc, sp_ep, sp_context);
                 return UCS_ERR_NO_MESSAGE;
             }
 
