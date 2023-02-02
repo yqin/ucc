@@ -27,6 +27,6 @@ make -j distclean
 make -j install 2>&1 | tee make.log
 
 # 3. build dpu daemon
-ssh $(scontrol show hostname ${SLURM_NODELIST} | grep "bf" | head -1) "sh $PWD/build.daemon.sh $PREFIX" 2>&1 | tee -a make.log
+ssh $(scontrol show hostname ${SLURM_NODELIST} | grep "bf" | head -1) "cd $PWD/src/components/tl/ucp/offload_dpu_daemon; source /usr/share/Modules/init/bash; module load workshop.arm; gcc *.c -g -ldpuoffloaddaemon -lucp -lucs -o $PREFIX/bin/ucc_offload_dpu_daemon.arm" 2>&1 | tee -a make.log
 
 make -j distclean
