@@ -33,7 +33,7 @@ typedef struct allgatherv_host_coll {
 } allgatherv_host_coll_t;
 
 /* active collectives running on the HOST */
-ucs_list_link_t active_colls;
+extern ucs_list_link_t active_colls;
 
 enum {
     UCC_TL_UCP_ALLGATHERV_ALG_RING,

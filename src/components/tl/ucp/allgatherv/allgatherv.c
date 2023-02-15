@@ -13,6 +13,9 @@
 #include "dpu_offload_service_daemon.h"
 #include "allgatherv_offload.h"
 
+/* active collectives running on the HOST */
+ucs_list_link_t active_colls;
+
 static bool active_colls_initialized = false;
 
 ucc_base_coll_alg_info_t
@@ -374,7 +377,7 @@ ucc_status_t ucc_tl_ucp_allgatherv_offload_init(ucc_base_coll_args_t *coll_args,
     allgatherv_host_coll_t *op = malloc(sizeof(allgatherv_host_coll_t));
     if (!op) {
         ucs_error("not enough memory");
-        return UCS_ERR_NO_MEMORY;
+        return UCC_ERR_NO_MEMORY;
     }
 
     /* initialize coll op and add it to the active_colls */
