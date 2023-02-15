@@ -263,7 +263,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_fini(ucc_tl_ucp_team_t *team)
 {
     if (IS_SERVICE_TEAM(team))
     {
-        return UCS_OK;
+        return UCC_OK;
     }
 
     if (ucc_tl_ucp_offloading.engine != NULL) {
@@ -271,7 +271,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_fini(ucc_tl_ucp_team_t *team)
             client_fini(&(ucc_tl_ucp_offloading.engine->client));
         offload_engine_fini(&(ucc_tl_ucp_offloading.engine));
     }
-    return UCS_OK;
+    return UCC_OK;
 }
 
 void create_team_map(ucc_tl_ucp_team_t *team, void *buff)
@@ -304,7 +304,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
     if (IS_SERVICE_TEAM(team))
     {
         team->dpu_offloading_econtext = NULL;
-        return UCS_OK;
+        return UCC_OK;
     }
 
     /* Figure out the number of local ranks so we can notify the DPU and
@@ -375,7 +375,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
         if (rc)
         {
             ucc_error("offload_engine_init() failed");
-            return UCS_ERR_NO_MESSAGE;
+            return UCC_ERR_NO_MESSAGE;
         }
         tl_info(lib, "creating offload engine: %p", ucc_tl_ucp_offloading.engine);
         char *offloading_config_file = getenv(OFFLOAD_CONFIG_FILE_PATH_ENVVAR);
@@ -396,7 +396,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
         if (rc)
         {
             ucc_error("get_host_config() failed");
-            return UCS_ERR_NO_MESSAGE;
+            return UCC_ERR_NO_MESSAGE;
         }
 
         ucc_tl_ucp_offloading.engine_ref_count = 0;
@@ -429,7 +429,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
             if (rc)
             {
                 ucc_error("get_local_service_proc_connect_info() failed");
-                return UCS_ERR_NO_MESSAGE;
+                return UCC_ERR_NO_MESSAGE;
             }
 
             tl_debug(lib, "DPU offloading: client initialization based on configuration file...");
@@ -488,7 +488,7 @@ ucc_status_t ucc_tl_ucp_team_offload_engine_init(ucc_tl_ucp_team_t *team, const 
         if (ret!= EVENT_DONE && ret != EVENT_INPROGRESS)
         {
             tl_debug(lib, "get_event() failed");
-            return UCS_ERR_NO_MESSAGE;
+            return UCC_ERR_NO_MESSAGE;
         }
 
         ucc_tl_ucp_offloading.engine_ref_count++;
